@@ -111,6 +111,97 @@ func TestResolve_SingleLink(t *testing.T) {
 	}
 }
 
+// rootResp models a real Windows DFS *root* referral: ServerType=ROOT and,
+// per [MS-DFSC], the StorageServers header flag IS set (the root targets are
+// servers you connect to). The crux of the Case-A bug: storage-set must NOT
+// be mistaken for "terminal" when path remains below the root.
+func rootResp(consumedPrefix, target string) *dfsc.ReferralResponse {
+	return &dfsc.ReferralResponse{
+		PathConsumed: uint16(len(utf16.Encode([]rune(consumedPrefix))) * 2),
+		HeaderFlags:  dfsc.HeaderFlagReferralServers | dfsc.HeaderFlagStorageServers,
+		Referrals:    []dfsc.Referral{{Version: 4, ServerType: dfsc.ServerTypeRoot, TTL: 900 * time.Second, Path: consumedPrefix, TargetUNC: target}},
+	}
+}
+
+// TestResolve_NamespaceFrontEnd_DeepLink is the issue-2431 production shape:
+// host is the DFS namespace front end (e.g. \10.176.0.40\Data) whose root
+// referral carries the StorageServers flag, and the requested path crosses a
+// DFS link below the root. Resolution must connect to the root target and
+// issue a SECOND (link) referral there — not stop at the root.
+func TestResolve_NamespaceFrontEnd_DeepLink(t *testing.T) {
+	calls := map[string]int{}
+	r := newTestResolver(func(_ context.Context, server, unc string) (*dfsc.ReferralResponse, error) {
+		calls[server]++
+		switch server {
+		case "nsfront": // namespace front end: returns a ROOT referral
+			return rootResp(`\nsfront\Data`, `\roottgt\Data`), nil
+		case "roottgt": // root target: resolves the CKY link to storage
+			return storageResp(`\roottgt\Data\CKY`, `\backing2\share2`), nil
+		default:
+			t.Fatalf("unexpected server %q (unc %q)", server, unc)
+			return nil, nil
+		}
+	})
+
+	srv, sh, rel, err := r.resolve(context.Background(), `\nsfront\Data\CKY\Departments`)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if srv != "backing2" || sh != "share2" || rel != "Departments" {
+		t.Fatalf("resolve = (%q,%q,%q), want backing2/share2/Departments", srv, sh, rel)
+	}
+	if calls["nsfront"] != 1 || calls["roottgt"] != 1 {
+		t.Fatalf("fetch calls = %v, want one each to nsfront and roottgt", calls)
+	}
+}
+
+// TestResolve_BareRootThenDeepLink guards against cache poisoning: resolving
+// the bare namespace root first (terminal — just connect to the root target)
+// must NOT cache the root mapping as a terminal LINK. A later deep-link
+// resolve that reuses the cached root entry must still issue the link
+// referral at the root target rather than short-circuit on the cache.
+func TestResolve_BareRootThenDeepLink(t *testing.T) {
+	calls := map[string]int{}
+	r := newTestResolver(func(_ context.Context, server, unc string) (*dfsc.ReferralResponse, error) {
+		calls[server]++
+		switch server {
+		case "nsfront":
+			return rootResp(`\nsfront\Data`, `\roottgt\Data`), nil
+		case "roottgt":
+			return storageResp(`\roottgt\Data\CKY`, `\backing2\share2`), nil
+		default:
+			t.Fatalf("unexpected server %q (unc %q)", server, unc)
+			return nil, nil
+		}
+	})
+
+	// Case-A mount: bare root resolves to the root target (terminal connect).
+	srv, sh, rel, err := r.resolve(context.Background(), `\nsfront\Data`)
+	if err != nil {
+		t.Fatalf("bare-root resolve: %v", err)
+	}
+	if srv != "roottgt" || sh != "Data" || rel != "" {
+		t.Fatalf("bare-root resolve = (%q,%q,%q), want roottgt/Data/<empty>", srv, sh, rel)
+	}
+
+	// Deep path below the same root must still follow the link, reusing the
+	// cached root mapping for the front end but querying roottgt for the link.
+	srv, sh, rel, err = r.resolve(context.Background(), `\nsfront\Data\CKY\Departments`)
+	if err != nil {
+		t.Fatalf("deep resolve: %v", err)
+	}
+	if srv != "backing2" || sh != "share2" || rel != "Departments" {
+		t.Fatalf("deep resolve = (%q,%q,%q), want backing2/share2/Departments", srv, sh, rel)
+	}
+	// nsfront queried once (root cached and reused); roottgt queried once.
+	if calls["nsfront"] != 1 {
+		t.Errorf("nsfront fetched %d times, want 1 (root mapping cached)", calls["nsfront"])
+	}
+	if calls["roottgt"] != 1 {
+		t.Errorf("roottgt fetched %d times, want 1", calls["roottgt"])
+	}
+}
+
 func TestResolve_Interlink_TwoHops(t *testing.T) {
 	r := newTestResolver(func(_ context.Context, server, unc string) (*dfsc.ReferralResponse, error) {
 		switch server {

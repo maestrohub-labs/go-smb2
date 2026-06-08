@@ -73,8 +73,14 @@ func (r *dfsResolver) resolve(ctx context.Context, unc string) (server, share, r
 		// Cache fast path: longest-prefix match short-circuits a network
 		// round trip.
 		if entry, ok := r.cache.longestPrefix(unc); ok {
-			unc = entry.target + unc[len(entry.consumedPrefix):]
-			if entry.final {
+			suffix := unc[len(entry.consumedPrefix):]
+			unc = entry.target + suffix
+			// A terminal link mapping is done. A root mapping is terminal
+			// only when nothing remains to resolve below the root: with a
+			// remaining suffix we must connect to the root target and issue
+			// a link referral for it (loop again). See the live-fetch
+			// branch below for the rationale.
+			if entry.final || suffix == "" {
 				s, sh, rel := splitUNC(unc)
 				return s, sh, rel, nil
 			}
@@ -109,20 +115,40 @@ func (r *dfsResolver) resolve(ctx context.Context, unc string) (server, share, r
 			return s, sh, rel, nil
 		}
 
-		final := resp.HeaderFlags&dfsc.HeaderFlagStorageServers != 0
+		// Classify the response. [MS-DFSC] sets the StorageServers header
+		// flag for BOTH link referrals (the target IS storage) AND root
+		// referrals (ServerType=ROOT — the target is a root/namespace
+		// server you connect to in order to keep resolving). So storage
+		// alone does NOT mean "stop": a root referral is terminal only
+		// when no path remains below the root.
+		consumed := utf16Prefix(unc, resp.PathConsumed)
+		suffix := utf16Suffix(unc, resp.PathConsumed)
+		storage := resp.HeaderFlags&dfsc.HeaderFlagStorageServers != 0
+		isRoot := pick.IsRootTarget()
+
+		// A terminal link mapping (storage link, not an interlink) can be
+		// cached and reused for any path under consumed. A root mapping is
+		// cached too (to skip re-querying the namespace front end) but is
+		// never blindly terminal — terminality is recomputed from the
+		// remaining suffix on every hit.
+		terminalLink := !isRoot && storage
 		ttl := pick.TTL
-		if !final && ttl < minRootTTL {
+		if !terminalLink && ttl < minRootTTL {
 			ttl = minRootTTL
 		}
 		if ttl <= 0 {
 			ttl = minRootTTL
 		}
+		r.cache.put(consumed, pick.TargetUNC, ttl, terminalLink)
 
-		consumed := utf16Prefix(unc, resp.PathConsumed)
-		r.cache.put(consumed, pick.TargetUNC, ttl, final)
-
-		unc = pick.TargetUNC + utf16Suffix(unc, resp.PathConsumed)
-		if final {
+		unc = pick.TargetUNC + suffix
+		// Terminal when: a storage link target, or a root referral with
+		// nothing left to resolve below it (we simply connect to the root
+		// target). Otherwise rewrite to the target and loop — the next hop
+		// asks the root/interlink target to resolve the remaining suffix,
+		// which is how a namespace-front-end (Case A) path that then
+		// crosses a link gets fully followed.
+		if terminalLink || (isRoot && suffix == "") {
 			s, sh, rel := splitUNC(unc)
 			return s, sh, rel, nil
 		}
