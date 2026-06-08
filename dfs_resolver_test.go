@@ -84,6 +84,51 @@ func storageResp(consumedPrefix, target string) *dfsc.ReferralResponse {
 	}
 }
 
+// TestResolve_SelfReferentialRoot_NoLoop models the live Windows behaviour for
+// a non-link path under a standalone root (\WINSRV\public\notalink.txt): the
+// server returns a ROOT referral whose target IS the namespace itself, so the
+// rewrite makes no progress. resolve must terminate on the root target and
+// return the path as-is, NOT spin until the visited-set check aborts with a
+// spurious "referral loop" error (the pre-fix behaviour, which broke proactive
+// resolution of every ordinary file under a DFS root).
+func TestResolve_SelfReferentialRoot_NoLoop(t *testing.T) {
+	r := newTestResolver(func(_ context.Context, _, _ string) (*dfsc.ReferralResponse, error) {
+		return rootResp(`\ns\public`, `\ns\public`), nil
+	})
+	server, share, rel, err := r.resolve(context.Background(), `\ns\public\notalink.txt`)
+	if err != nil {
+		t.Fatalf("self-referential root must terminate, got error: %v", err)
+	}
+	if server != "ns" || share != "public" || rel != "notalink.txt" {
+		t.Errorf("resolve = (%q,%q,%q), want (ns, public, notalink.txt)", server, share, rel)
+	}
+}
+
+// TestResolve_SelfReferentialRoot_CachedSecondPath covers the cache-hit branch
+// of the no-progress guard: once the root entry is cached, a second non-link
+// path under it must be served from cache (no extra fetch) and still terminate
+// cleanly instead of looping.
+func TestResolve_SelfReferentialRoot_CachedSecondPath(t *testing.T) {
+	calls := 0
+	r := newTestResolver(func(_ context.Context, _, _ string) (*dfsc.ReferralResponse, error) {
+		calls++
+		return rootResp(`\ns\public`, `\ns\public`), nil
+	})
+	if _, _, _, err := r.resolve(context.Background(), `\ns\public\a.txt`); err != nil {
+		t.Fatalf("first resolve: %v", err)
+	}
+	server, share, rel, err := r.resolve(context.Background(), `\ns\public\b.txt`)
+	if err != nil {
+		t.Fatalf("second resolve (cache-hit no-progress) errored: %v", err)
+	}
+	if server != "ns" || share != "public" || rel != "b.txt" {
+		t.Errorf("resolve = (%q,%q,%q), want (ns, public, b.txt)", server, share, rel)
+	}
+	if calls != 1 {
+		t.Errorf("fetch called %d times, want 1 (second path must be cache-served)", calls)
+	}
+}
+
 func TestResolve_SingleLink(t *testing.T) {
 	calls := 0
 	r := newTestResolver(func(_ context.Context, server, unc string) (*dfsc.ReferralResponse, error) {

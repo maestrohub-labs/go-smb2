@@ -74,16 +74,28 @@ func (r *dfsResolver) resolve(ctx context.Context, unc string) (server, share, r
 		// round trip.
 		if entry, ok := r.cache.longestPrefix(unc); ok {
 			suffix := unc[len(entry.consumedPrefix):]
-			unc = entry.target + suffix
+			rewritten := entry.target + suffix
 			// A terminal link mapping is done. A root mapping is terminal
 			// only when nothing remains to resolve below the root: with a
 			// remaining suffix we must connect to the root target and issue
 			// a link referral for it (loop again). See the live-fetch
 			// branch below for the rationale.
 			if entry.final || suffix == "" {
-				s, sh, rel := splitUNC(unc)
+				s, sh, rel := splitUNC(rewritten)
 				return s, sh, rel, nil
 			}
+			// No-progress guard: a self-referential (standalone) root entry
+			// rewrites the UNC to itself — the root target IS the namespace we
+			// just consumed. The remaining suffix is then a plain path under
+			// the root with no covering link, so terminate on the root target
+			// rather than looping. Without this, any non-link path under a
+			// standalone root spins until the visited-set check aborts the
+			// whole resolve with a spurious "referral loop" error.
+			if strings.EqualFold(rewritten, unc) {
+				s, sh, rel := splitUNC(rewritten)
+				return s, sh, rel, nil
+			}
+			unc = rewritten
 			if visited[strings.ToLower(unc)] {
 				return "", "", "", fmt.Errorf("dfs: referral loop resolving %q", unc)
 			}
@@ -141,7 +153,7 @@ func (r *dfsResolver) resolve(ctx context.Context, unc string) (server, share, r
 		}
 		r.cache.put(consumed, pick.TargetUNC, ttl, terminalLink)
 
-		unc = pick.TargetUNC + suffix
+		rewritten := pick.TargetUNC + suffix
 		// Terminal when: a storage link target, or a root referral with
 		// nothing left to resolve below it (we simply connect to the root
 		// target). Otherwise rewrite to the target and loop — the next hop
@@ -149,9 +161,19 @@ func (r *dfsResolver) resolve(ctx context.Context, unc string) (server, share, r
 		// which is how a namespace-front-end (Case A) path that then
 		// crosses a link gets fully followed.
 		if terminalLink || (isRoot && suffix == "") {
-			s, sh, rel := splitUNC(unc)
+			s, sh, rel := splitUNC(rewritten)
 			return s, sh, rel, nil
 		}
+		// No-progress guard (mirrors the cache-hit branch): a self-referential
+		// root referral consumed only the share and points back at itself, so
+		// the remaining suffix is a plain root-relative path with no covering
+		// link. Terminate on the root target instead of looping, which a
+		// standalone root would otherwise do for every non-link path.
+		if isRoot && strings.EqualFold(rewritten, unc) {
+			s, sh, rel := splitUNC(rewritten)
+			return s, sh, rel, nil
+		}
+		unc = rewritten
 
 		if visited[strings.ToLower(unc)] {
 			return "", "", "", fmt.Errorf("dfs: referral loop resolving %q", unc)

@@ -92,7 +92,7 @@ func decodeEntry(b []byte, start int) (Referral, int, error) {
 		// [MS-DFSC] 2.2.5.1: VersionNumber, Size, ServerType,
 		// ReferralEntryFlags, then an inline null-terminated UTF-16
 		// ShareName (no offsets, no TTL).
-		r.TargetUNC = utf16zRel(b, start, 8, size)
+		r.TargetUNC = utf16zRel(b, start, 8)
 		r.Path = r.TargetUNC
 	case 2:
 		// [MS-DFSC] 2.2.5.2: + Proximity(4), TimeToLive(4),
@@ -102,9 +102,9 @@ func decodeEntry(b []byte, start int) (Referral, int, error) {
 			return Referral{}, 0, fmt.Errorf("v2 entry too small: %d", size)
 		}
 		r.TTL = time.Duration(le.Uint32(entry[12:16])) * time.Second
-		r.Path = utf16zRel(b, start, le.Uint16(entry[16:18]), size)
-		r.AltPath = utf16zRel(b, start, le.Uint16(entry[18:20]), size)
-		r.TargetUNC = utf16zRel(b, start, le.Uint16(entry[20:22]), size)
+		r.Path = utf16zRel(b, start, le.Uint16(entry[16:18]))
+		r.AltPath = utf16zRel(b, start, le.Uint16(entry[18:20]))
+		r.TargetUNC = utf16zRel(b, start, le.Uint16(entry[20:22]))
 	case 3, 4:
 		// [MS-DFSC] 2.2.5.3 (v3) / 2.2.5.4 (v4). VersionNumber, Size,
 		// ServerType, ReferralEntryFlags, TimeToLive(4), then either the
@@ -121,17 +121,17 @@ func decodeEntry(b []byte, start int) (Referral, int, error) {
 			if size < 18 {
 				return Referral{}, 0, fmt.Errorf("v%d namelist entry too small: %d", version, size)
 			}
-			r.Path = utf16zRel(b, start, le.Uint16(entry[12:14]), size)
-			r.TargetUNC = utf16zRel(b, start, le.Uint16(entry[16:18]), size)
+			r.Path = utf16zRel(b, start, le.Uint16(entry[12:14]))
+			r.TargetUNC = utf16zRel(b, start, le.Uint16(entry[16:18]))
 		} else {
 			// DFSPathOffset(2), DFSAlternatePathOffset(2),
 			// NetworkAddressOffset(2), ServiceSiteGuid(16, ignored).
 			if size < 18 {
 				return Referral{}, 0, fmt.Errorf("v%d target entry too small: %d", version, size)
 			}
-			r.Path = utf16zRel(b, start, le.Uint16(entry[12:14]), size)
-			r.AltPath = utf16zRel(b, start, le.Uint16(entry[14:16]), size)
-			r.TargetUNC = utf16zRel(b, start, le.Uint16(entry[16:18]), size)
+			r.Path = utf16zRel(b, start, le.Uint16(entry[12:14]))
+			r.AltPath = utf16zRel(b, start, le.Uint16(entry[14:16]))
+			r.TargetUNC = utf16zRel(b, start, le.Uint16(entry[16:18]))
 		}
 	default:
 		return Referral{}, 0, fmt.Errorf("unsupported referral version %d", version)
@@ -142,15 +142,23 @@ func decodeEntry(b []byte, start int) (Referral, int, error) {
 
 // utf16zRel reads a null-terminated UTF-16LE string located at
 // (entryStart + off). off is relative to the entry start, as specified
-// by MS-DFSC. An off of 0 means "absent" and yields "". maxSize bounds
-// the read to the entry so a malformed offset cannot walk into the next
-// entry or off the end of the buffer.
-func utf16zRel(b []byte, entryStart int, off uint16, maxSize int) string {
+// by MS-DFSC. An off of 0 means "absent" and yields "".
+//
+// The read is bounded by the end of the whole referral buffer, NOT by the
+// entry's fixed Size: in v2-v4 entries the DFSPath / NetworkAddress strings
+// do not live inside the fixed entry — they sit in a shared string pool that
+// follows all the fixed entries, so their offsets routinely point well past
+// (entryStart + Size). Clamping to the entry size (the previous behavior) made
+// every v3/v4 NetworkAddress decode to "", which silently broke referral
+// following on real Windows DFS (the resolver saw an empty TargetUNC, found no
+// usable target, and treated the link as not covered). The null terminator
+// delimits the string; len(b) is the safety bound against a malformed offset.
+func utf16zRel(b []byte, entryStart int, off uint16) string {
 	if off == 0 {
 		return ""
 	}
 	start := entryStart + int(off)
-	end := min(entryStart+maxSize, len(b))
+	end := len(b)
 	if start < 0 || start >= end {
 		return ""
 	}

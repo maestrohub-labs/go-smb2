@@ -25,6 +25,20 @@ type dfsRouter struct {
 	// the underlying tree connect. Non-empty only for a Case-A mount whose
 	// backing target sits below the backing share root.
 	pathPrefix string
+	// ownServer / ownShare identify the (server, share) this Share's tree
+	// connect is actually bound to — for a plain mount the mounted share,
+	// for a Case-A mount the resolved backing root. Proactive resolution
+	// compares a referral's target against these to decide whether a path
+	// stays on this connection (open locally) or must be redirected to a
+	// different backing target.
+	ownServer string
+	ownShare  string
+}
+
+// isSelf reports whether (server, share) is the backing this router's Share is
+// already connected to, so a proactively-resolved path needs no redirect.
+func (d *dfsRouter) isSelf(server, share string) bool {
+	return strings.EqualFold(server, d.ownServer) && strings.EqualFold(share, d.ownShare)
 }
 
 // opPath joins the share-relative op name with the Case-A path prefix to
@@ -53,12 +67,16 @@ func (d *dfsRouter) fullUNC(name string) string {
 	return d.namespacePrefix + `\` + name
 }
 
-// attachDFS wires a freshly tree-connected Share with DFS routing.
-func attachDFS(fs *Share, r *dfsResolver, namespaceUNC, pathPrefix string, ownsResolver bool) {
+// attachDFS wires a freshly tree-connected Share with DFS routing. ownServer
+// and ownShare name the backing this Share's tree connect is bound to (see
+// dfsRouter.isSelf).
+func attachDFS(fs *Share, r *dfsResolver, namespaceUNC, pathPrefix, ownServer, ownShare string, ownsResolver bool) {
 	fs.dfs = &dfsRouter{
 		resolver:        r,
 		namespacePrefix: normUNC(namespaceUNC),
 		pathPrefix:      pathPrefix,
+		ownServer:       ownServer,
+		ownShare:        ownShare,
 	}
 	fs.ownsResolver = ownsResolver
 }
@@ -89,8 +107,32 @@ func (c *Session) dfsMount(sharename string, mapping utf16le.MapChars, origErr e
 	// backing-relative prefix; the cached backing share itself stays
 	// prefix-free for reuse by mid-op retries.
 	fs := &Share{treeConn: backing.treeConn, ctx: context.Background(), mapping: mapping}
-	attachDFS(fs, r, sharename, rel, true)
+	attachDFS(fs, r, sharename, rel, server, share, true)
 	return fs, nil
+}
+
+// dfsProactiveCreate resolves name's namespace UNC through the referral system
+// and, when it maps to a backing (server, share) other than this Share's own,
+// opens the CREATE against that backing target. It returns redirected=true only
+// when it actually issued the open here; redirected=false means "fall through
+// to a local open" — either resolution did not move the path off this share, or
+// it failed (in which case the local open + reactive fallback is the safe
+// default, preserving behaviour against servers that DO return
+// STATUS_PATH_NOT_COVERED).
+func (fs *Share) dfsProactiveCreate(name string, req *smb2.CreateRequest, followSymlinks bool) (f *File, redirected bool, err error) {
+	server, share, rel, rerr := fs.dfs.resolver.resolve(fs.ctx, fs.dfs.fullUNC(name))
+	if rerr != nil || share == "" || fs.dfs.isSelf(server, share) {
+		return nil, false, nil
+	}
+	backing, berr := fs.dfs.resolver.conns.shareFor(fs.ctx, server, share, fs.mapping)
+	if berr != nil {
+		return nil, false, nil
+	}
+	// rel is "" for the backing share root; pass it verbatim. createFileRaw
+	// bypasses normPath, so a literal "." would reach Windows as an invalid
+	// object name (STATUS_OBJECT_NAME_INVALID) instead of the root.
+	f, err = backing.WithContext(fs.ctx).createFileRaw(rel, req, followSymlinks)
+	return f, true, err
 }
 
 // createFile is the DFS-aware wrapper over createFileRaw. For a non-DFS
@@ -104,6 +146,18 @@ func (fs *Share) createFile(name string, req *smb2.CreateRequest, followSymlinks
 	}
 
 	req.Header().Flags |= smb2.SMB2_FLAGS_DFS_OPERATIONS
+
+	// Proactive resolution. A DFS-root share (SMB2_SHAREFLAG_DFS in the tree
+	// connect) can serve a link's local reparse stub on a direct CREATE
+	// instead of returning STATUS_PATH_NOT_COVERED — Windows standalone roots
+	// do exactly this — so the reactive fallback below never fires for them.
+	// Resolve the namespace UNC up front, the way the Windows DFS client does,
+	// and redirect the open when it maps to a different backing (server,share).
+	if fs.shareFlags&smb2.SMB2_SHAREFLAG_DFS != 0 {
+		if f, redirected, rerr := fs.dfsProactiveCreate(name, req, followSymlinks); redirected {
+			return f, rerr
+		}
+	}
 
 	f, err := fs.createFileRaw(fs.dfs.opPath(name), req, followSymlinks)
 	if err == nil || !isPathNotCovered(err) {
@@ -133,11 +187,10 @@ func (fs *Share) dfsResolveAndCreate(name string, req *smb2.CreateRequest, follo
 	if err != nil {
 		return nil, err
 	}
-	relName := rel
-	if relName == "" {
-		relName = "."
-	}
-	return backing.WithContext(fs.ctx).createFileRaw(relName, req, followSymlinks)
+	// rel is "" for the backing share root. createFileRaw bypasses normPath,
+	// so the root MUST be the empty name: a literal "." is sent verbatim and
+	// rejected by Windows with STATUS_OBJECT_NAME_INVALID.
+	return backing.WithContext(fs.ctx).createFileRaw(rel, req, followSymlinks)
 }
 
 // mountRaw tree-connects to sharename and returns a plain Share with no

@@ -15,11 +15,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cloudsoda/sddl"
 	"github.com/maestrohub-labs/go-smb2/internal/erref"
 	"github.com/maestrohub-labs/go-smb2/internal/msrpc"
 	"github.com/maestrohub-labs/go-smb2/internal/smb2"
 	"github.com/maestrohub-labs/go-smb2/internal/utf16le"
-	"github.com/cloudsoda/sddl"
 )
 
 // SecurityInformationRequestFlags the data that is expected to be returned in Security Information
@@ -234,11 +234,14 @@ func (c *Session) Mount(sharename string, opts ...MountOption) (*Share, error) {
 
 	fs := &Share{treeConn: tc, ctx: context.Background(), mapping: options.mapping}
 	if dfsOn {
-		// A plain mount can still cross a DFS link mid-operation (Case B);
-		// attach routing so createFile can resolve+retry on demand.
+		// A plain mount can still cross a DFS link mid-operation (Case B),
+		// and a DFS-root share may need proactive resolution; attach routing
+		// so createFile can resolve on demand. The share's own identity is the
+		// (server, share) we just tree-connected to.
 		r := newDFSResolver(c)
 		c.warnIfNoDFSCap(r)
-		attachDFS(fs, r, sharename, "", true)
+		ownServer, ownShare, _ := splitUNC(sharename)
+		attachDFS(fs, r, sharename, "", ownServer, ownShare, true)
 	}
 	return fs, nil
 }

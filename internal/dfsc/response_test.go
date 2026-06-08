@@ -132,6 +132,71 @@ func TestDecode_V4_RootReferral(t *testing.T) {
 	}
 }
 
+// TestDecode_V4_PooledStrings models the REAL Windows RESP_GET_DFS_REFERRAL
+// layout, which the other encoder helper (v4Target) does not: each fixed
+// referral entry's Size field covers ONLY the 34-byte fixed header, and all
+// the DFSPath / NetworkAddress strings live in one shared pool that follows
+// every fixed entry. The entry-relative string offsets therefore point well
+// past (entryStart + Size).
+//
+// This is the exact shape captured from Windows Server (Size=34,
+// NetworkAddressOffset=114). The previous decoder clamped string reads to the
+// entry's Size, so it returned an empty TargetUNC here — which made the DFS
+// resolver find no usable target and silently treat every link as "not
+// covered." This test pins the pooled-string layout so that regression cannot
+// recur. (See rule 31: test against the production wire format, not a
+// convenient stand-in.)
+func TestDecode_V4_PooledStrings(t *testing.T) {
+	dfsPath := `\WINSRV\public\link`
+	consumed := uint16(len(utf16.Encode([]rune(dfsPath))) * 2)
+	raw := buildResponsePooledV4(consumed, HeaderFlagStorageServers,
+		v4Spec{serverType: ServerTypeLink, ttl: 300, dfsPath: dfsPath, netAddr: `\WINSRV\backingshare`},
+	)
+
+	resp, err := DecodeReferralResponse(raw)
+	if err != nil {
+		t.Fatalf("DecodeReferralResponse: %v", err)
+	}
+	if len(resp.Referrals) != 1 {
+		t.Fatalf("got %d referrals, want 1", len(resp.Referrals))
+	}
+	r := resp.Referrals[0]
+	if r.TargetUNC != `\WINSRV\backingshare` {
+		t.Errorf("TargetUNC = %q, want %q (string offset points past entry Size into the shared pool)",
+			r.TargetUNC, `\WINSRV\backingshare`)
+	}
+	if r.Path != dfsPath {
+		t.Errorf("Path = %q, want %q", r.Path, dfsPath)
+	}
+	if r.TTL != 300*time.Second {
+		t.Errorf("TTL = %v, want 300s", r.TTL)
+	}
+}
+
+// TestDecode_V4_PooledStrings_Multi covers two entries sharing one trailing
+// string pool — the offsets of entry #1's strings are relative to entry #1's
+// start but point past both fixed headers.
+func TestDecode_V4_PooledStrings_Multi(t *testing.T) {
+	raw := buildResponsePooledV4(12, HeaderFlagStorageServers,
+		v4Spec{serverType: ServerTypeLink, ttl: 300, dfsPath: `\a\b\c`, netAddr: `\srv1\sh1`},
+		v4Spec{serverType: ServerTypeLink, ttl: 300, dfsPath: `\a\b\c`, netAddr: `\srv2\sh2longer`},
+	)
+
+	resp, err := DecodeReferralResponse(raw)
+	if err != nil {
+		t.Fatalf("DecodeReferralResponse: %v", err)
+	}
+	if len(resp.Referrals) != 2 {
+		t.Fatalf("got %d referrals, want 2", len(resp.Referrals))
+	}
+	if got := resp.Referrals[0].TargetUNC; got != `\srv1\sh1` {
+		t.Errorf("referral[0].TargetUNC = %q, want %q", got, `\srv1\sh1`)
+	}
+	if got := resp.Referrals[1].TargetUNC; got != `\srv2\sh2longer` {
+		t.Errorf("referral[1].TargetUNC = %q, want %q", got, `\srv2\sh2longer`)
+	}
+}
+
 func TestDecode_Errors(t *testing.T) {
 	t.Run("short header", func(t *testing.T) {
 		if _, err := DecodeReferralResponse([]byte{0, 0, 1}); err == nil {
@@ -197,14 +262,14 @@ func v4Target(serverType, entryFlags uint16, ttl uint32, dfsPath, altPath, netAd
 	size := uint16(cur + len(netB))
 
 	e := make([]byte, 0, size)
-	e = append(e, u16(4)...)          // VersionNumber
-	e = append(e, u16(size)...)       // Size
-	e = append(e, u16(serverType)...) // ServerType
-	e = append(e, u16(entryFlags)...) // ReferralEntryFlags
-	e = append(e, u32(ttl)...)        // TimeToLive
-	e = append(e, u16(dfsOff)...)     // DFSPathOffset
-	e = append(e, u16(altOff)...)     // DFSAlternatePathOffset
-	e = append(e, u16(netOff)...)     // NetworkAddressOffset
+	e = append(e, u16(4)...)           // VersionNumber
+	e = append(e, u16(size)...)        // Size
+	e = append(e, u16(serverType)...)  // ServerType
+	e = append(e, u16(entryFlags)...)  // ReferralEntryFlags
+	e = append(e, u32(ttl)...)         // TimeToLive
+	e = append(e, u16(dfsOff)...)      // DFSPathOffset
+	e = append(e, u16(altOff)...)      // DFSAlternatePathOffset
+	e = append(e, u16(netOff)...)      // NetworkAddressOffset
 	e = append(e, make([]byte, 16)...) // ServiceSiteGuid
 	e = append(e, dfsB...)
 	if altPath != "" {
@@ -212,6 +277,68 @@ func v4Target(serverType, entryFlags uint16, ttl uint32, dfsPath, altPath, netAd
 	}
 	e = append(e, netB...)
 	return e
+}
+
+// v4Spec describes a v4 target entry for the pooled-string encoder.
+type v4Spec struct {
+	serverType, entryFlags    uint16
+	ttl                       uint32
+	dfsPath, altPath, netAddr string
+}
+
+// buildResponsePooledV4 assembles a RESP_GET_DFS_REFERRAL the way Windows
+// actually frames it: every fixed referral-entry header (Size = 34, the fixed
+// portion only) is emitted first, contiguously, and ALL strings follow in one
+// shared pool. Each entry's string offsets are entry-relative (per [MS-DFSC])
+// but resolve into the trailing pool, i.e. they exceed the entry's own Size.
+// This is the layout v4Target (above) does NOT model.
+func buildResponsePooledV4(pathConsumed uint16, headerFlags uint32, specs ...v4Spec) []byte {
+	const fixed = 34 // v4 fixed header through ServiceSiteGuid
+	const hdr = 8
+	n := len(specs)
+	poolStart := hdr + n*fixed
+
+	// Lay all strings into the shared pool, recording absolute offsets.
+	var pool []byte
+	abs := func(s string) uint16 {
+		off := uint16(poolStart + len(pool))
+		pool = append(pool, utf16z(s)...)
+		return off
+	}
+	type offs struct{ dfs, alt, net uint16 }
+	o := make([]offs, n)
+	for i, sp := range specs {
+		o[i].dfs = abs(sp.dfsPath)
+		if sp.altPath != "" {
+			o[i].alt = abs(sp.altPath)
+		}
+		o[i].net = abs(sp.netAddr)
+	}
+
+	b := make([]byte, 0, poolStart+len(pool))
+	b = append(b, u16(pathConsumed)...)
+	b = append(b, u16(uint16(n))...)
+	b = append(b, u32(headerFlags)...)
+	for i, sp := range specs {
+		entryStart := hdr + i*fixed
+		rel := func(absOff uint16) uint16 {
+			if absOff == 0 {
+				return 0
+			}
+			return absOff - uint16(entryStart)
+		}
+		b = append(b, u16(4)...)             // VersionNumber
+		b = append(b, u16(fixed)...)         // Size = fixed header only
+		b = append(b, u16(sp.serverType)...) // ServerType
+		b = append(b, u16(sp.entryFlags)...) // ReferralEntryFlags
+		b = append(b, u32(sp.ttl)...)        // TimeToLive
+		b = append(b, u16(rel(o[i].dfs))...) // DFSPathOffset (entry-relative)
+		b = append(b, u16(rel(o[i].alt))...) // DFSAlternatePathOffset
+		b = append(b, u16(rel(o[i].net))...) // NetworkAddressOffset
+		b = append(b, make([]byte, 16)...)   // ServiceSiteGuid
+	}
+	b = append(b, pool...)
+	return b
 }
 
 // buildResponse assembles a RESP_GET_DFS_REFERRAL from pre-encoded entries.

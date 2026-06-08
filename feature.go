@@ -6,8 +6,20 @@ import (
 
 // client
 
+// clientCapabilities are advertised in the NEGOTIATE request. SMB2_GLOBAL_CAP_DFS
+// is included unconditionally — exactly as Windows, cifs.ko, and smbclient do —
+// because Windows servers only enable DFS processing (returning
+// STATUS_PATH_NOT_COVERED on a DFS link, which drives transparent referral
+// following) for clients that negotiated the DFS capability. The per-request
+// SMB2_FLAGS_DFS_OPERATIONS header flag is necessary but NOT sufficient: without
+// the negotiated capability the server serves the bare DFS reparse stub instead
+// of signalling the referral. Advertising it is harmless for non-DFS sessions —
+// the server takes no DFS action unless an individual request also carries the
+// SMB2_FLAGS_DFS_OPERATIONS flag, which only happens when a Dialer set EnableDFS
+// (see dfs_mount.go createFile). Conn.capabilities masks this against the
+// server's advertised set, so the bit survives only when the server supports DFS.
 const (
-	clientCapabilities = smb2.SMB2_GLOBAL_CAP_LARGE_MTU | smb2.SMB2_GLOBAL_CAP_ENCRYPTION
+	clientCapabilities = smb2.SMB2_GLOBAL_CAP_LARGE_MTU | smb2.SMB2_GLOBAL_CAP_ENCRYPTION | smb2.SMB2_GLOBAL_CAP_DFS
 )
 
 var (

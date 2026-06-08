@@ -34,6 +34,25 @@ func TestDFSRouter_OpPath(t *testing.T) {
 	})
 }
 
+func TestDFSRouter_IsSelf(t *testing.T) {
+	d := &dfsRouter{ownServer: "WINSRV", ownShare: "public"}
+	cases := []struct {
+		server, share string
+		want          bool
+	}{
+		{"WINSRV", "public", true},        // exact
+		{"winsrv", "PUBLIC", true},        // case-insensitive (SMB is case-insensitive)
+		{"WINSRV", "backingshare", false}, // a DFS link target on the same server
+		{"FILESRV", "public", false},      // different server, same share name
+		{"", "", false},
+	}
+	for _, c := range cases {
+		if got := d.isSelf(c.server, c.share); got != c.want {
+			t.Errorf("isSelf(%q,%q)=%v, want %v", c.server, c.share, got, c.want)
+		}
+	}
+}
+
 func TestDFSRouter_FullUNC(t *testing.T) {
 	d := &dfsRouter{namespacePrefix: `\nsroot\dfs`, pathPrefix: `base`}
 	for in, want := range map[string]string{
