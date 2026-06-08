@@ -219,12 +219,28 @@ func (c *Session) Mount(sharename string, opts ...MountOption) (*Share, error) {
 		opt(&options)
 	}
 
+	dfsOn := c.dialer.EnableDFS && !isIPCShare(sharename)
+
 	tc, err := treeConnect(c.ctx, c.s, sharename, 0, options.mapping)
 	if err != nil {
+		// Case A: the share is a DFS namespace root (or otherwise not
+		// covered by this server). Resolve the referral and mount the
+		// backing target instead.
+		if dfsOn && isDFSResolvable(err) {
+			return c.dfsMount(sharename, options.mapping, err)
+		}
 		return nil, err
 	}
 
-	return &Share{treeConn: tc, ctx: context.Background(), mapping: options.mapping}, nil
+	fs := &Share{treeConn: tc, ctx: context.Background(), mapping: options.mapping}
+	if dfsOn {
+		// A plain mount can still cross a DFS link mid-operation (Case B);
+		// attach routing so createFile can resolve+retry on demand.
+		r := newDFSResolver(c)
+		c.warnIfNoDFSCap(r)
+		attachDFS(fs, r, sharename, "", true)
+	}
+	return fs, nil
 }
 
 func (c *Session) ListSharenames() ([]string, error) {
@@ -344,6 +360,14 @@ type Share struct {
 	*treeConn
 	ctx     context.Context
 	mapping utf16le.MapChars
+
+	// dfs carries transparent DFS routing for this share; nil means DFS is
+	// off (upstream behavior). Set only on top-level mounts when the
+	// Dialer has EnableDFS. See dfs_mount.go.
+	dfs *dfsRouter
+	// ownsResolver marks the share that owns the DFS resolver's backing
+	// sessions, so Umount of that share tears them down.
+	ownsResolver bool
 }
 
 func (fs *Share) WithContext(ctx context.Context) *Share {
@@ -351,14 +375,19 @@ func (fs *Share) WithContext(ctx context.Context) *Share {
 		panic("nil context")
 	}
 	return &Share{
-		treeConn: fs.treeConn,
-		ctx:      ctx,
-		mapping:  fs.mapping,
+		treeConn:     fs.treeConn,
+		ctx:          ctx,
+		mapping:      fs.mapping,
+		dfs:          fs.dfs,
+		ownsResolver: fs.ownsResolver,
 	}
 }
 
 // Umount disconects the current SMB tree.
 func (fs *Share) Umount() error {
+	if fs.ownsResolver && fs.dfs != nil {
+		fs.dfs.resolver.close() // tear down DFS backing-server sessions
+	}
 	return fs.treeConn.disconnect(fs.ctx)
 }
 
@@ -1171,7 +1200,10 @@ func (fs *Share) SetSecurityInfoRaw(name string, flags SecurityInformationReques
 	return f.SetSecurityInfoRaw(flags, sd)
 }
 
-func (fs *Share) createFile(name string, req *smb2.CreateRequest, followSymlinks bool) (f *File, err error) {
+// createFileRaw issues the SMB2 CREATE without any DFS handling. The
+// DFS-aware wrapper createFile (dfs_mount.go) calls this; non-DFS shares
+// reach it directly through that wrapper's fast path.
+func (fs *Share) createFileRaw(name string, req *smb2.CreateRequest, followSymlinks bool) (f *File, err error) {
 	if followSymlinks {
 		return fs.createFileRec(name, req)
 	}
