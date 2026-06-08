@@ -65,6 +65,13 @@ type Dialer struct {
 	// at Mount time and on STATUS_PATH_NOT_COVERED mid-operation, dialing
 	// backing servers with this same Dialer (see dfs_resolver.go).
 	EnableDFS bool
+
+	// DFSLog, if non-nil, receives one-line diagnostic messages about DFS
+	// resolution — most importantly, a single notice when EnableDFS is set
+	// but the server advertised no DFS capability so following is inert.
+	// Optional; nil disables DFS diagnostics. The library performs no other
+	// logging, so this is the only sink.
+	DFSLog func(format string, args ...any)
 }
 
 /*
