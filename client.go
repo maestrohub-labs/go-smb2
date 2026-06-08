@@ -15,10 +15,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cloudsoda/go-smb2/internal/erref"
-	"github.com/cloudsoda/go-smb2/internal/msrpc"
-	"github.com/cloudsoda/go-smb2/internal/smb2"
-	"github.com/cloudsoda/go-smb2/internal/utf16le"
+	"github.com/maestrohub-labs/go-smb2/internal/erref"
+	"github.com/maestrohub-labs/go-smb2/internal/msrpc"
+	"github.com/maestrohub-labs/go-smb2/internal/smb2"
+	"github.com/maestrohub-labs/go-smb2/internal/utf16le"
 	"github.com/cloudsoda/sddl"
 )
 
@@ -56,6 +56,15 @@ type Dialer struct {
 	MaxCreditBalance uint16 // if it's zero, clientMaxCreditBalance is used. (See feature.go for more details)
 	Negotiator       Negotiator
 	Initiator        Initiator
+
+	// EnableDFS opts this session into transparent DFS (Distributed File
+	// System) referral following. When false (the default) the client
+	// behaves byte-for-byte identically to upstream: no DFS IOCTLs are
+	// issued and no referral resolution is attempted. When true, the
+	// client resolves DFS namespace roots and link targets transparently
+	// at Mount time and on STATUS_PATH_NOT_COVERED mid-operation, dialing
+	// backing servers with this same Dialer (see dfs_resolver.go).
+	EnableDFS bool
 }
 
 /*
@@ -109,7 +118,7 @@ func (d *Dialer) DialConn(ctx context.Context, tcpConn net.Conn, address string)
 		return nil, err
 	}
 
-	return &Session{s: s, ctx: context.Background(), addr: tcpConn.RemoteAddr().String(), host: address}, nil
+	return &Session{s: s, ctx: context.Background(), addr: tcpConn.RemoteAddr().String(), host: address, dialer: *d}, nil
 }
 
 type mountOptions struct {
@@ -153,13 +162,20 @@ type Session struct {
 	ctx  context.Context
 	addr string
 	host string
+
+	// dialer is a value copy of the Dialer that established this session.
+	// It is retained so DFS resolution can dial backing servers named in
+	// referrals using the identical Negotiator/Initiator/credit settings
+	// (see dfs_conn.go). Copied by value at DialConn time so later
+	// mutation of the caller's Dialer cannot affect an existing session.
+	dialer Dialer
 }
 
 func (c *Session) WithContext(ctx context.Context) *Session {
 	if ctx == nil {
 		panic("nil context")
 	}
-	return &Session{s: c.s, ctx: ctx, addr: c.addr, host: c.host}
+	return &Session{s: c.s, ctx: ctx, addr: c.addr, host: c.host, dialer: c.dialer}
 }
 
 // Logoff invalidates the current SMB session.

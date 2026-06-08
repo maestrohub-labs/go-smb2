@@ -6,8 +6,8 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/cloudsoda/go-smb2/internal/crypto/cmac"
-	"github.com/cloudsoda/go-smb2/internal/smb2"
+	"github.com/maestrohub-labs/go-smb2/internal/crypto/cmac"
+	"github.com/maestrohub-labs/go-smb2/internal/smb2"
 )
 
 func TestSign(t *testing.T) {

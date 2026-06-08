@@ -9,8 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/cloudsoda/go-smb2/internal/erref"
-	"github.com/cloudsoda/go-smb2/internal/smb2"
+	"github.com/maestrohub-labs/go-smb2/internal/erref"
+	"github.com/maestrohub-labs/go-smb2/internal/smb2"
 )
 
 // length of tag used to verify the integrity of the encrypted data

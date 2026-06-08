@@ -1,0 +1,56 @@
+maestrohub-labs/go-smb2
+Copyright 2026 maestrohub-labs
+
+------------------------------------------------------------------------
+Derivative work notice
+------------------------------------------------------------------------
+
+This repository is a fork of, and a derivative work based on:
+
+    github.com/cloudsoda/go-smb2
+    (itself a fork of github.com/hirochachacha/go-smb2)
+    Copyright (c) 2016 Hiroshi Ioka. All rights reserved.
+
+The original work is licensed under the 2-clause BSD license, reproduced
+in full and unmodified in the LICENSE file at the root of this
+repository. That copyright notice and license are retained as required
+by the BSD-2-Clause terms, and continue to apply to all unmodified
+upstream source.
+
+Fork base: cloudsoda/go-smb2 @ v0.0.0-20260408191215-349cbc5b0af3,
+preserved as the `fork-base` git tag so the modifications below diff
+cleanly against the upstream source.
+
+------------------------------------------------------------------------
+Modifications by maestrohub-labs
+------------------------------------------------------------------------
+
+The maestrohub-labs modifications add transparent DFS (Distributed File
+System) referral following to the SMB2 client. These are licensed under
+the same 2-clause BSD license as the upstream work (see LICENSE).
+
+The modifications consist of, principally:
+
+  * internal/dfsc/      - MS-DFSC referral request/response codec
+  * dfs.go              - DFS referral IOCTL transport (IPC$ / FSCTL)
+  * dfs_resolver.go     - DFS referral resolution loop
+  * dfs_cache.go        - DFS referral cache (TTL, longest-prefix)
+  * dfs_conn.go         - backing-server connection map
+  * client.go,          - Dialer.EnableDFS opt-in, Mount/op DFS hooks,
+    client_fs.go,         persisted Dialer/Initiator for backing dials
+    tree_conn.go,
+    session.go
+
+------------------------------------------------------------------------
+Microsoft Open Specifications
+------------------------------------------------------------------------
+
+The DFS referral codec (internal/dfsc) implements the wire format
+defined in the publicly published Microsoft Open Specifications document
+[MS-DFSC]: Distributed File System (DFS): Referral Protocol
+(https://learn.microsoft.com/openspecs/windows_protocols/ms-dfsc/).
+
+Implementation of these published specifications is covered by the
+Microsoft Open Specification Promise. No copyrighted source code from
+any third-party DFS implementation was used in writing the
+internal/dfsc package.

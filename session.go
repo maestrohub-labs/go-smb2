@@ -12,10 +12,10 @@ import (
 	"fmt"
 	"hash"
 
-	"github.com/cloudsoda/go-smb2/internal/crypto/ccm"
-	"github.com/cloudsoda/go-smb2/internal/crypto/cmac"
-	"github.com/cloudsoda/go-smb2/internal/erref"
-	"github.com/cloudsoda/go-smb2/internal/smb2"
+	"github.com/maestrohub-labs/go-smb2/internal/crypto/ccm"
+	"github.com/maestrohub-labs/go-smb2/internal/crypto/cmac"
+	"github.com/maestrohub-labs/go-smb2/internal/erref"
+	"github.com/maestrohub-labs/go-smb2/internal/smb2"
 )
 
 func sessionSetup(ctx context.Context, conn *conn, i Initiator) (*session, error) {

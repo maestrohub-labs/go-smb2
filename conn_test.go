@@ -5,7 +5,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/cloudsoda/go-smb2/internal/smb2"
+	"github.com/maestrohub-labs/go-smb2/internal/smb2"
 	"github.com/stretchr/testify/require"
 )
 

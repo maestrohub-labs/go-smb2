@@ -1,8 +1,8 @@
 smb2
 ====
 
-[![Build Status](https://github.com/cloudsoda/go-smb2/actions/workflows/go.yml/badge.svg)](https://github.com/cloudsoda/go-smb2/actions/workflows/go.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/cloudsoda/go-smb2.svg)](https://pkg.go.dev/github.com/cloudsoda/go-smb2)
+[![Build Status](https://github.com/maestrohub-labs/go-smb2/actions/workflows/go.yml/badge.svg)](https://github.com/maestrohub-labs/go-smb2/actions/workflows/go.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/maestrohub-labs/go-smb2.svg)](https://pkg.go.dev/github.com/maestrohub-labs/go-smb2)
 
 Description
 -----------
@@ -12,12 +12,12 @@ An SMB2/3 client implementation. This is a fork of the project [github.com/hiroc
 Installation
 ------------
 
-`go get github.com/cloudsoda/go-smb2`
+`go get github.com/maestrohub-labs/go-smb2`
 
 Documentation
 -------------
 
-https://pkg.go.dev/github.com/cloudsoda/go-smb2
+https://pkg.go.dev/github.com/maestrohub-labs/go-smb2
 
 Examples
 --------
@@ -31,7 +31,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/cloudsoda/go-smb2"
+	"github.com/maestrohub-labs/go-smb2"
 )
 
 func main() {
@@ -68,7 +68,7 @@ import (
 	"io"
 	"net"
 
-	"github.com/cloudsoda/go-smb2"
+	"github.com/maestrohub-labs/go-smb2"
 )
 
 func main() {
@@ -128,7 +128,7 @@ import (
 	"net"
 	"os"
 
-	"github.com/cloudsoda/go-smb2"
+	"github.com/maestrohub-labs/go-smb2"
 )
 
 func main() {
@@ -179,7 +179,7 @@ import (
 	"net"
 	iofs "io/fs"
 
-	"github.com/cloudsoda/go-smb2"
+	"github.com/maestrohub-labs/go-smb2"
 )
 
 func main() {
@@ -233,7 +233,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cloudsoda/go-smb2"
+	"github.com/maestrohub-labs/go-smb2"
 	"github.com/jcmturner/gokrb5/v8/client"
 	"github.com/jcmturner/gokrb5/v8/config"
 )
