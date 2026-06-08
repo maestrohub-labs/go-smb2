@@ -7,7 +7,13 @@ smb2
 Description
 -----------
 
-An SMB2/3 client implementation. This is a fork of the project [github.com/hirochachacha/go-smb2](https://github.com/hirochachacha/go-smb2). Any releases will be pre-1.0.0 for some time as features and bug fixes are implemented.
+An SMB2/3 client implementation.
+
+This is the **maestrohub-labs** fork of [github.com/cloudsoda/go-smb2](https://github.com/cloudsoda/go-smb2) (itself a fork of [github.com/hirochachacha/go-smb2](https://github.com/hirochachacha/go-smb2)). It adds **transparent DFS (Distributed File System) referral following**: when enabled via `Dialer.EnableDFS`, the client resolves DFS namespace roots and link targets automatically — at `Mount` time and on `STATUS_PATH_NOT_COVERED` mid-operation — by issuing `FSCTL_DFS_GET_REFERRALS` and dialing the backing servers named in the referral. With `EnableDFS` left at its default (`false`), behaviour is byte-for-byte identical to upstream.
+
+The fork base is preserved as the `fork-base` git tag so the DFS modifications diff cleanly against the upstream source. The upstream BSD-2-Clause licence is retained unchanged in `LICENSE`; see `NOTICE` for the derivative-work attribution and the [MS-DFSC] Open Specification basis of the referral codec.
+
+Any releases will be pre-1.0.0 for some time as features and bug fixes are implemented.
 
 Installation
 ------------
