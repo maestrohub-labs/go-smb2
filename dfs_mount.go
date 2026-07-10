@@ -45,13 +45,21 @@ func (d *dfsRouter) isSelf(server, share string) bool {
 // get the path to send to the backing tree connect.
 func (d *dfsRouter) opPath(name string) string {
 	name = strings.TrimLeft(name, `\/`)
+	if name == "." {
+		// A caller-supplied "." means the share root. Normalise it to the
+		// empty name up front so both branches below treat root uniformly.
+		name = ""
+	}
 	if d.pathPrefix == "" {
-		if name == "" {
-			return "."
-		}
+		// Root (or any op) on a plain-mounted share. The root MUST be the
+		// empty string, never ".": opPath feeds createFileRaw, which
+		// bypasses normPath, so a literal "." is sent verbatim and Windows
+		// rejects it with STATUS_OBJECT_NAME_INVALID (Samba tolerates it).
+		// This matches the sibling dfsResolveAndCreate/dfsProactiveCreate
+		// paths, which already pass "" for the backing-share root.
 		return name
 	}
-	if name == "" || name == "." {
+	if name == "" {
 		return d.pathPrefix
 	}
 	return d.pathPrefix + `\` + name
