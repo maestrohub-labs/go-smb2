@@ -12,7 +12,11 @@ func TestDFSRouter_OpPath(t *testing.T) {
 		for in, want := range map[string]string{
 			`link\sub\f`: `link\sub\f`,
 			`\link\f`:    `link\f`,
-			``:           ".",
+			// Share root MUST resolve to the empty name, not ".". opPath
+			// feeds createFileRaw, which bypasses normPath, so a literal
+			// "." reaches Windows verbatim as STATUS_OBJECT_NAME_INVALID.
+			``:  ``,
+			`.`: ``,
 		} {
 			if got := d.opPath(in); got != want {
 				t.Errorf("opPath(%q)=%q, want %q", in, got, want)
@@ -32,6 +36,24 @@ func TestDFSRouter_OpPath(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestDFSRouter_OpPath_ShareRootNeverDot is the regression guard for the
+// STATUS_OBJECT_NAME_INVALID bug on plain-mounted DFS-aware shares
+// (maestrohub-labs/maestrohub#3323, go-smb2#1). opPath feeds createFileRaw,
+// which sends req.Name verbatim without normPath, so a literal "." reaches a
+// Windows server as an invalid object name. Every form of "the share root"
+// the caller can produce — the empty name and the normPath-untouched "." —
+// MUST resolve to the empty string on a no-prefix (plain) share. Samba
+// tolerates ".", which is why this is asserted at the unit level rather than
+// caught by the Samba-backed behavioural suite.
+func TestDFSRouter_OpPath_ShareRootNeverDot(t *testing.T) {
+	d := &dfsRouter{namespacePrefix: `\srv\share`} // plain share: pathPrefix == ""
+	for _, in := range []string{"", ".", `\`, `/`, `\.`} {
+		if got := d.opPath(in); got != "" {
+			t.Errorf("opPath(%q)=%q on a plain share; the share root must be the empty name, never %q", in, got, got)
+		}
+	}
 }
 
 func TestDFSRouter_IsSelf(t *testing.T) {
