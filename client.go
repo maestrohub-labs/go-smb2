@@ -1889,6 +1889,64 @@ func (f *File) Sync() (err error) {
 	return nil
 }
 
+// TryLock takes an exclusive byte-range lock on [offset, offset+length)
+// without waiting (MS-SMB2 3.2.4.19). The server enforces it against every
+// other open of the file, from any client, and releases it when this handle
+// is closed or its session ends, so a holder that dies cannot leave it held.
+//
+// When another open holds a conflicting lock it returns an error that
+// errors.Is reports as ErrLockNotGranted; the caller decides whether and how
+// long to retry. Windows needs the handle opened with read or write data
+// access (FILE_READ_DATA or FILE_WRITE_DATA), not append-only access.
+func (f *File) TryLock(offset, length int64) error {
+	return f.lockRange("lock", offset, length, smb2.SMB2_LOCKFLAG_EXCLUSIVE_LOCK|smb2.SMB2_LOCKFLAG_FAIL_IMMEDIATELY)
+}
+
+// Unlock releases a byte-range lock this handle took with TryLock. The
+// range must match the locked one exactly.
+func (f *File) Unlock(offset, length int64) error {
+	return f.lockRange("unlock", offset, length, smb2.SMB2_LOCKFLAG_UNLOCK)
+}
+
+func (f *File) lockRange(op string, offset, length int64, flags uint32) (err error) {
+	if offset < 0 || length <= 0 {
+		return &os.PathError{Op: op, Path: f.name, Err: os.ErrInvalid}
+	}
+
+	req := &smb2.LockRequest{
+		FileId: f.fd,
+		Locks:  []smb2.LockElement{{Offset: uint64(offset), Length: uint64(length), Flags: flags}},
+	}
+
+	req.CreditCharge, _, err = f.fs.loanCredit(0)
+	defer func() {
+		if err != nil {
+			f.fs.chargeCredit(req.CreditCharge)
+		}
+	}()
+	if err != nil {
+		return &os.PathError{Op: op, Path: f.name, Err: err}
+	}
+
+	res, err := f.sendRecv(smb2.SMB2_LOCK, req)
+	if err != nil {
+		var rerr *ResponseError
+		if errors.As(err, &rerr) {
+			switch erref.NtStatus(rerr.Code) {
+			case erref.STATUS_LOCK_NOT_GRANTED, erref.STATUS_FILE_LOCK_CONFLICT:
+				err = ErrLockNotGranted
+			}
+		}
+		return &os.PathError{Op: op, Path: f.name, Err: err}
+	}
+
+	if smb2.LockResponseDecoder(res).IsInvalid() {
+		return &os.PathError{Op: op, Path: f.name, Err: &InvalidResponseError{"broken lock response format"}}
+	}
+
+	return nil
+}
+
 func (f *File) Truncate(size int64) error {
 	if size < 0 {
 		return os.ErrInvalid

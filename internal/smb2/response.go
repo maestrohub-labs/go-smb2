@@ -1096,6 +1096,43 @@ func (r FlushResponseDecoder) StructureSize() uint16 {
 }
 
 // ----------------------------------------------------------------------------
+// SMB2 LOCK Response (MS-SMB2 2.2.27)
+//
+
+type LockResponse struct {
+	PacketHeader
+}
+
+func (c *LockResponse) Header() *PacketHeader {
+	return &c.PacketHeader
+}
+
+func (c *LockResponse) Size() int {
+	return 64 + 4
+}
+
+func (c *LockResponse) Encode(pkt []byte) {
+	c.Command = SMB2_LOCK
+	c.encodeHeader(pkt)
+
+	res := pkt[64:]
+	le.PutUint16(res[:2], 4) // StructureSize
+}
+
+type LockResponseDecoder []byte
+
+func (r LockResponseDecoder) IsInvalid() bool {
+	if len(r) < 4 {
+		return true
+	}
+	return r.StructureSize() != 4
+}
+
+func (r LockResponseDecoder) StructureSize() uint16 {
+	return le.Uint16(r[:2])
+}
+
+// ----------------------------------------------------------------------------
 // SMB2 READ Response
 //
 
