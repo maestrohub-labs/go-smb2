@@ -744,6 +744,87 @@ func (r FlushRequestDecoder) FileId() FileIdDecoder {
 }
 
 // ----------------------------------------------------------------------------
+// SMB2 LOCK Request Packet (MS-SMB2 2.2.26)
+//
+
+// LockElement is one SMB2_LOCK_ELEMENT: a byte range and what to do with it.
+type LockElement struct {
+	Offset uint64
+	Length uint64
+	Flags  uint32
+}
+
+type LockRequest struct {
+	PacketHeader
+
+	// LockSequence is the 4-bit LockSequenceNumber and 28-bit
+	// LockSequenceIndex packed as the spec lays them out. Zero opts out of
+	// lock-sequence replay detection, which is valid for every dialect.
+	LockSequence uint32
+	FileId       *FileId
+	Locks        []LockElement
+}
+
+func (c *LockRequest) Header() *PacketHeader {
+	return &c.PacketHeader
+}
+
+func (c *LockRequest) Size() int {
+	return 64 + 24 + 24*len(c.Locks)
+}
+
+func (c *LockRequest) Encode(pkt []byte) {
+	c.Command = SMB2_LOCK
+	c.encodeHeader(pkt)
+
+	req := pkt[64:]
+	le.PutUint16(req[:2], 48) // StructureSize: fixed part plus one element
+	le.PutUint16(req[2:4], uint16(len(c.Locks)))
+	le.PutUint32(req[4:8], c.LockSequence)
+	c.FileId.Encode(req[8:24])
+	for i, l := range c.Locks {
+		el := req[24+24*i : 24+24*(i+1)]
+		le.PutUint64(el[:8], l.Offset)
+		le.PutUint64(el[8:16], l.Length)
+		le.PutUint32(el[16:20], l.Flags)
+		le.PutUint32(el[20:24], 0) // Reserved
+	}
+}
+
+type LockRequestDecoder []byte
+
+func (r LockRequestDecoder) IsInvalid() bool {
+	if len(r) < 48 {
+		return true
+	}
+	if r.StructureSize() != 48 {
+		return true
+	}
+	return len(r) < 24+24*int(r.LockCount())
+}
+
+func (r LockRequestDecoder) StructureSize() uint16 {
+	return le.Uint16(r[:2])
+}
+
+func (r LockRequestDecoder) LockCount() uint16 {
+	return le.Uint16(r[2:4])
+}
+
+func (r LockRequestDecoder) LockSequence() uint32 {
+	return le.Uint32(r[4:8])
+}
+
+func (r LockRequestDecoder) FileId() FileIdDecoder {
+	return FileIdDecoder(r[8:24])
+}
+
+func (r LockRequestDecoder) Lock(i int) LockElement {
+	el := r[24+24*i : 24+24*(i+1)]
+	return LockElement{Offset: le.Uint64(el[:8]), Length: le.Uint64(el[8:16]), Flags: le.Uint32(el[16:20])}
+}
+
+// ----------------------------------------------------------------------------
 // SMB2 READ Request Packet
 //
 

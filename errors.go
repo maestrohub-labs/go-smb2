@@ -13,6 +13,12 @@ import (
 // ErrRequestNotAccepted happens when the host cannot accept more connections.
 var ErrRequestNotAccepted = errors.New(erref.STATUS_REQUEST_NOT_ACCEPTED.Error())
 
+// ErrLockNotGranted is returned by File.TryLock when another open holds a
+// conflicting byte-range lock (STATUS_LOCK_NOT_GRANTED, or
+// STATUS_FILE_LOCK_CONFLICT, which Windows and Samba return for a repeated
+// attempt on a range that is still locked).
+var ErrLockNotGranted = errors.New(erref.STATUS_LOCK_NOT_GRANTED.Error())
+
 // TransportError represents a error come from net.Conn layer.
 type TransportError struct {
 	Err error
