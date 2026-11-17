@@ -262,7 +262,7 @@ func (c *Session) ListSharenames() ([]string, error) {
 
 	fs = fs.WithContext(c.ctx)
 
-	f, err := fs.OpenFile("srvsvc", os.O_RDWR, 0666)
+	f, err := fs.OpenFile("srvsvc", os.O_RDWR, 0o666)
 	if err != nil {
 		return nil, err
 	}
@@ -395,7 +395,7 @@ func (fs *Share) Umount() error {
 }
 
 func (fs *Share) Create(name string) (*File, error) {
-	return fs.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
+	return fs.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o666)
 }
 
 func (fs *Share) newFile(r smb2.CreateResponseDecoder, name string) *File {
@@ -464,7 +464,7 @@ func (fs *Share) OpenFile(name string, flag int, perm os.FileMode) (*File, error
 	}
 
 	var attrs uint32 = smb2.FILE_ATTRIBUTE_NORMAL
-	if perm&0200 == 0 {
+	if perm&0o200 == 0 {
 		attrs = smb2.FILE_ATTRIBUTE_READONLY
 	}
 
@@ -586,7 +586,7 @@ func (fs *Share) Readlink(name string) (string, error) {
 func (fs *Share) Remove(name string) error {
 	err := fs.remove(name)
 	if os.IsPermission(err) {
-		if e := fs.Chmod(name, 0666); e != nil {
+		if e := fs.Chmod(name, 0o666); e != nil {
 			return err
 		}
 		return fs.remove(name)
@@ -2004,7 +2004,7 @@ func (f *File) chmod(mode os.FileMode) error {
 
 	attrs := base.FileAttributes()
 
-	if mode&0200 != 0 {
+	if mode&0o200 != 0 {
 		attrs &^= smb2.FILE_ATTRIBUTE_READONLY
 	} else {
 		attrs |= smb2.FILE_ATTRIBUTE_READONLY
@@ -2431,6 +2431,9 @@ func (f *File) readdir(pattern string) (fi []os.FileInfo, err error) {
 		if next == 0 {
 			return fi, nil
 		}
+		if uint64(next) >= uint64(len(output)) {
+			return nil, &InvalidResponseError{"bad directory entry offset"}
+		}
 
 		output = output[next:]
 	}
@@ -2594,13 +2597,13 @@ func (fs *FileStat) Mode() os.FileMode {
 	var m os.FileMode
 
 	if fs.FileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY != 0 {
-		m |= os.ModeDir | 0111
+		m |= os.ModeDir | 0o111
 	}
 
 	if fs.FileAttributes&smb2.FILE_ATTRIBUTE_READONLY != 0 {
-		m |= 0444
+		m |= 0o444
 	} else {
-		m |= 0666
+		m |= 0o666
 	}
 
 	if fs.FileAttributes&smb2.FILE_ATTRIBUTE_REPARSE_POINT != 0 {

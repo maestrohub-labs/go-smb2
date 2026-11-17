@@ -13,6 +13,8 @@ This is the **maestrohub-labs** fork of [github.com/cloudsoda/go-smb2](https://g
 
 The fork base is preserved as the `fork-base` git tag so the DFS modifications diff cleanly against the upstream source. The upstream BSD-2-Clause licence is retained unchanged in `LICENSE`; see `NOTICE` for the derivative-work attribution and the [MS-DFSC] Open Specification basis of the referral codec.
 
+`fork-base` is upstream commit `349cbc5` (8 Apr 2026). Upstream fixes are ported by cherry-pick (`git cherry-pick -x`, so each commit names its upstream original). Ported so far: `2a2a61d` (signature verification of async responses; nil-verifier panic), `7b96c35` (GO-2026-5051: ReadDir out-of-bounds read; receiver-goroutine panic recovery; response bounds checks) and `d8c5600` (NTLM/SPNEGO panics on malicious server input). Vulnerability databases list only the `cloudsoda` and `hirochachacha` module paths, so govulncheck, OSV-Scanner and Trivy cannot match this fork: review upstream commits after the last ported one by hand.
+
 Any releases will be pre-1.0.0 for some time as features and bug fixes are implemented.
 
 Installation
